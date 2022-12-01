@@ -1,6 +1,6 @@
 use dyn_stack::{DynStack, SizeOverflow, StackReq};
 use faer_core::{
-    permutation::{permute_rows, PermutationIndicesRef},
+    permutation::{permute_rows, PermutationRef},
     solve::*,
     temp_mat_req, temp_mat_uninit,
     zip::MatUninit,
@@ -11,7 +11,7 @@ use reborrow::*;
 fn solve_impl<T: ComplexField>(
     lu_factors: MatRef<'_, T>,
     conj_lhs: Conj,
-    row_perm: PermutationIndicesRef<'_>,
+    row_perm: PermutationRef<'_>,
     dst: MatMut<'_, T>,
     rhs: Option<MatRef<'_, T>>,
     conj_rhs: Conj,
@@ -59,7 +59,7 @@ fn solve_impl<T: ComplexField>(
 fn solve_transpose_impl<T: ComplexField>(
     lu_factors: MatRef<'_, T>,
     conj_lhs: Conj,
-    row_perm: PermutationIndicesRef<'_>,
+    row_perm: PermutationRef<'_>,
     dst: MatMut<'_, T>,
     rhs: Option<MatRef<'_, T>>,
     conj_rhs: Conj,
@@ -112,8 +112,47 @@ fn solve_transpose_impl<T: ComplexField>(
 }
 
 /// Computes the size and alignment of required workspace for solving a linear system defined by a
-/// matrix, given its partial pivoting LU decomposition.
-pub fn solve_req<T: 'static>(
+/// matrix in place, given its full pivoting LU decomposition.
+pub fn solve_in_place_req<T: 'static>(
+    lu_nrows: usize,
+    lu_ncols: usize,
+    rhs_ncols: usize,
+    parallelism: Parallelism,
+) -> Result<StackReq, SizeOverflow> {
+    let _ = lu_ncols;
+    let _ = parallelism;
+    temp_mat_req::<T>(lu_nrows, rhs_ncols)
+}
+
+/// Computes the size and alignment of required workspace for solving a linear system defined by a
+/// matrix out of place, given its full pivoting LU decomposition.
+pub fn solve_to_req<T: 'static>(
+    lu_nrows: usize,
+    lu_ncols: usize,
+    rhs_ncols: usize,
+    parallelism: Parallelism,
+) -> Result<StackReq, SizeOverflow> {
+    let _ = lu_ncols;
+    let _ = parallelism;
+    temp_mat_req::<T>(lu_nrows, rhs_ncols)
+}
+
+/// Computes the size and alignment of required workspace for solving a linear system defined by
+/// the transpose of a matrix in place, given its full pivoting LU decomposition.
+pub fn solve_transpose_in_place_req<T: 'static>(
+    lu_nrows: usize,
+    lu_ncols: usize,
+    rhs_ncols: usize,
+    parallelism: Parallelism,
+) -> Result<StackReq, SizeOverflow> {
+    let _ = lu_ncols;
+    let _ = parallelism;
+    temp_mat_req::<T>(lu_nrows, rhs_ncols)
+}
+
+/// Computes the size and alignment of required workspace for solving a linear system defined by
+/// the transpose of a matrix out of place, given its full pivoting LU decomposition.
+pub fn solve_transpose_to_req<T: 'static>(
     lu_nrows: usize,
     lu_ncols: usize,
     rhs_ncols: usize,
@@ -143,7 +182,7 @@ pub fn solve_to<T: ComplexField>(
     dst: MatMut<'_, T>,
     lu_factors: MatRef<'_, T>,
     conj_lhs: Conj,
-    row_perm: PermutationIndicesRef<'_>,
+    row_perm: PermutationRef<'_>,
     rhs: MatRef<'_, T>,
     conj_rhs: Conj,
     parallelism: Parallelism,
@@ -178,7 +217,7 @@ pub fn solve_to<T: ComplexField>(
 pub fn solve_in_place<T: ComplexField>(
     lu_factors: MatRef<'_, T>,
     conj_lhs: Conj,
-    row_perm: PermutationIndicesRef<'_>,
+    row_perm: PermutationRef<'_>,
     rhs: MatMut<'_, T>,
     conj_rhs: Conj,
     parallelism: Parallelism,
@@ -215,7 +254,7 @@ pub fn solve_transpose_to<T: ComplexField>(
     dst: MatMut<'_, T>,
     lu_factors: MatRef<'_, T>,
     conj_lhs: Conj,
-    row_perm: PermutationIndicesRef<'_>,
+    row_perm: PermutationRef<'_>,
     rhs: MatRef<'_, T>,
     conj_rhs: Conj,
     parallelism: Parallelism,
@@ -249,7 +288,7 @@ pub fn solve_transpose_to<T: ComplexField>(
 pub fn solve_transpose_in_place<T: ComplexField>(
     lu_factors: MatRef<'_, T>,
     conj_lhs: Conj,
-    row_perm: PermutationIndicesRef<'_>,
+    row_perm: PermutationRef<'_>,
     rhs: MatMut<'_, T>,
     conj_rhs: Conj,
     parallelism: Parallelism,
@@ -269,10 +308,11 @@ pub fn solve_transpose_in_place<T: ComplexField>(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use assert2::assert as fancy_assert;
     use dyn_stack::GlobalMemBuffer;
     use faer_core::{c32, c64, mul::matmul, Mat};
-    use rand::random;
 
     use crate::partial_pivoting::compute::{lu_in_place, lu_in_place_req};
 
@@ -323,7 +363,7 @@ mod tests {
                         rhs,
                         conj_rhs,
                         parallelism,
-                        make_stack!(solve_req::<T>(n, n, k, parallelism).unwrap()),
+                        make_stack!(solve_to_req::<T>(n, n, k, parallelism).unwrap()),
                     );
 
                     let mut rhs_reconstructed = Mat::zeros(n, k);
@@ -357,7 +397,7 @@ mod tests {
     }
 
     fn test_solve_transpose_to<T: ComplexField>(mut gen: impl FnMut() -> T, epsilon: T::Real) {
-        (0..32).chain((1..16).map(|i| i * 32)).for_each(|n| {
+        (0..32).chain((1..8).map(|i| i * 32)).for_each(|n| {
             for conj_lhs in [Conj::No, Conj::Yes] {
                 for conj_rhs in [Conj::No, Conj::Yes] {
                     let a = Mat::with_dims(|_, _| gen(), n, n);
@@ -395,7 +435,7 @@ mod tests {
                         rhs,
                         conj_rhs,
                         parallelism,
-                        make_stack!(solve_req::<T>(n, n, k, parallelism).unwrap()),
+                        make_stack!(solve_transpose_to_req::<T>(n, n, k, parallelism).unwrap()),
                     );
 
                     let mut rhs_reconstructed = Mat::zeros(n, k);
@@ -427,28 +467,47 @@ mod tests {
             }
         });
     }
+    use rand::prelude::*;
+    thread_local! {
+        static RNG: RefCell<StdRng> = RefCell::new(StdRng::seed_from_u64(0));
+    }
+
+    fn random_f64() -> f64 {
+        RNG.with(|rng| {
+            let mut rng = rng.borrow_mut();
+            let rng = &mut *rng;
+            rng.gen()
+        })
+    }
+    fn random_f32() -> f32 {
+        RNG.with(|rng| {
+            let mut rng = rng.borrow_mut();
+            let rng = &mut *rng;
+            rng.gen()
+        })
+    }
 
     #[test]
     fn test_solve_to_f64() {
-        test_solve_to(|| random::<f64>(), 1e-6_f64);
-        test_solve_transpose_to(|| random::<f64>(), 1e-6_f64);
+        test_solve_to(random_f64, 1e-6_f64);
+        test_solve_transpose_to(random_f64, 1e-6_f64);
     }
 
     #[test]
     fn test_solve_to_f32() {
-        test_solve_to(|| random::<f32>(), 2e-1_f32);
-        test_solve_transpose_to(|| random::<f32>(), 2e-1_f32);
+        test_solve_to(random_f32, 1e-1_f32);
+        test_solve_transpose_to(random_f32, 1e-1_f32);
     }
 
     #[test]
     fn test_solve_to_c64() {
-        test_solve_to(|| c64::new(random(), random()), 1e-6_f64);
-        test_solve_transpose_to(|| c64::new(random(), random()), 1e-6_f64);
+        test_solve_to(|| c64::new(random_f64(), random_f64()), 1e-6_f64);
+        test_solve_transpose_to(|| c64::new(random_f64(), random_f64()), 1e-6_f64);
     }
 
     #[test]
     fn test_solve_to_c32() {
-        test_solve_to(|| c32::new(random(), random()), 2e-1_f32);
-        test_solve_transpose_to(|| c32::new(random(), random()), 2e-1_f32);
+        test_solve_to(|| c32::new(random_f32(), random_f32()), 2e-1_f32);
+        test_solve_transpose_to(|| c32::new(random_f32(), random_f32()), 2e-1_f32);
     }
 }
